@@ -364,7 +364,6 @@ const ENTRY_FIELDS = [  // unofficial entry fields, in display order
   ['participation', 'Likelihood of participating in the MRP'], ['relocation', 'Potential relocation'],
   ['duties', 'Duties'], ['team_composition', 'Team composition'],
   ['duty_station_assessment', 'Duty station assessment'], ['comments', 'Comments'],
-  ['name', 'Name'], ['email', 'Email'],
 ];
 function searchFields(p) {
   const f = [['MJO', p.mjo_number], ['Title', p.display_title], ['Compendium title', p.title_compendium],
@@ -656,8 +655,7 @@ function entryHtml(e, terms, withConfidence) {
   }
   h += `<p class="small muted">As listed in the sheet: ${esc([e.title, e.entity, e.duty_station, e.job_network].filter(Boolean).join(' · '))}</p>`;
   h += '<dl class="kv">' + ENTRY_FIELDS.filter(([k]) => e[k]).map(([k, l]) => {
-    const v = k === 'email' ? `<a href="mailto:${esc(e[k])}">${hl(e[k], terms)}</a>` : fmt(e[k], terms);
-    return `<dt>${esc(l)}</dt><dd>${v}</dd>`;
+    return `<dt>${esc(l)}</dt><dd>${fmt(e[k], terms)}</dd>`;
   }).join('') + '</dl></article>';
   return h;
 }
@@ -665,7 +663,7 @@ function unofficialPanel(p, terms) {
   const list = p.unofficial;
   return `<section class="panel unofficial" aria-labelledby="h-unof">
     <h3 id="h-unof">Unofficial — written by the current post holder</h3>
-    <p class="small">From the crowd-sourced post-sharing sheet. Not verified. The link between an entry and this post is never certain: read the confidence level and reason first.</p>
+    <p class="small">From the crowd-sourced post-sharing sheet, without the contributors' names and contact details. Not verified. The link between an entry and this post is never certain: read the confidence level and reason first.</p>
     ${list.length ? (list.length > 1 ? `<p class="small"><strong>${list.length} entries</strong> could describe this post; each is labelled separately.</p>` : '') +
       list.map(e => entryHtml(e, terms, true)).join('')
       : '<p class="muted">No post-sharing entry seems to describe this post.</p>'}

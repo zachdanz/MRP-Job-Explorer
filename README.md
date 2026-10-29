@@ -94,8 +94,9 @@ MRPJobExplorer/
   docs/index.html             the same page, published by GitHub Pages
 ```
 Only the raw post-sharing CSV is **gitignored**, because it contains colleagues' WhatsApp numbers. Everything
-else, including `dist/mrp-explorer.html`, `docs/index.html` and `data/posts.json` (which contain names and emails from the sheet),
-is committed. To rebuild from a fresh clone, put the downloaded sheet back in `data/raw/`.
+else, including `dist/mrp-explorer.html`, `docs/index.html` and `data/posts.json`, is committed. Contributors' names and emails
+are **never published**: entries carry anonymous ids, and `data/private/` (gitignored) holds the secret key behind
+the ids and `entry_key.md`, which says whose entry each id is. Keep that folder: without its key, ids change. To rebuild from a fresh clone, put the downloaded sheet back in `data/raw/`.
 
 ### Build
 ```bash
@@ -128,12 +129,12 @@ Pasting the same JO twice is harmless; identical copies are kept once.
 3. Run `python scripts/build.py` and review "Ambiguous matches" in the report.
 
 ### Override a match
-Edit `data/manual_matches.json`. Entry ids are listed in the build report; an id is the person's NAME in lower
-case with dashes.
+Edit `data/manual_matches.json`. Entry ids are anonymous codes like `E-3f9a1c`, listed in the build report.
+Look up whose entry an id is in `data/private/entry_key.md` (on your computer only).
 ```json
 {
-  "matches":  { "zach-danz": "215456", "someone-else": ["215398", "215421"] },
-  "no_match": [ "an-entry-id" ]
+  "matches":  { "E-3f9a1c": "215456", "E-0b72d4": ["215398", "215421"] },
+  "no_match": [ "E-9c1e55" ]
 }
 ```
 Manual matches show as **"Matched manually"**, never as confirmed. Re-run the build afterwards.

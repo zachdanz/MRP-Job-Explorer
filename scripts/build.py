@@ -19,7 +19,10 @@ Entries whose holder is "Not participating" / "Requesting Deferral" never go abo
 import csv
 import datetime
 import glob
+import hashlib
+import hmac
 import json
+import secrets
 import os
 import re
 import sys
@@ -32,6 +35,12 @@ DATA = parse_jos.DATA
 DIST = os.path.join(ROOT, 'dist')
 TEMPLATE = os.path.join(ROOT, 'explorer', 'template.html')
 MANUAL = os.path.join(DATA, 'manual_matches.json')
+# Local-only folder (gitignored): the secret key behind the anonymous entry ids, and who each id is.
+PRIVATE = os.path.join(DATA, 'private')
+SALT_FILE = os.path.join(PRIVATE, 'entry_id_key.txt')
+KEY_FILE = os.path.join(PRIVATE, 'entry_key.md')
+# Identifying fields: used inside the build only, never written to any published output.
+PRIVATE_FIELDS = ('name', 'email', 'csv_row')
 
 LEVEL_LABEL = {'reported': 'Reported by post holder', 'likely': 'Likely match — unit matches JO',
                'possible': 'Possible match', 'manual': 'Matched manually'}
@@ -64,10 +73,25 @@ def tidy(v):
     return v or None
 
 
+def id_key():
+    """Secret key for the anonymous entry ids, created once and kept in data/private/ (never committed).
+    The same key gives the same id for the same NAME, so manual matches survive a re-download of the sheet,
+    but without the key nobody can tell whose entry an id is."""
+    os.makedirs(PRIVATE, exist_ok=True)
+    if not os.path.exists(SALT_FILE):
+        open(SALT_FILE, 'w', encoding='utf-8').write(secrets.token_hex(32) + '\n')
+    return open(SALT_FILE, encoding='utf-8').read().strip().encode()
+
+
+def anon_id(name, key):
+    norm = re.sub(r'\s+', ' ', name).strip().lower()
+    return 'E-' + hmac.new(key, norm.encode('utf-8'), hashlib.sha256).hexdigest()[:6]
+
+
 def read_entries(path):
     # The sheet is exported from Excel as Windows-1252, not UTF-8.
     rows = list(csv.DictReader(open(path, encoding='cp1252', newline='')))
-    entries, seen = [], {}
+    entries, seen, key = [], {}, id_key()
     for i, r in enumerate(rows, start=2):  # row 1 is the header
         name = tidy(col(r, 'NAME'))
         if not name:
@@ -75,8 +99,8 @@ def read_entries(path):
         network = tidy(col(r, 'JOB FAMILY'))
         if network and network.upper() in NETWORKS:
             network = network.upper()
-        # Stable id from the name, so manual matches survive a re-download of the sheet.
-        base = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+        # Anonymous but stable id (see id_key), so manual matches survive a re-download of the sheet.
+        base = anon_id(name, key)
         seen[base] = seen.get(base, 0) + 1
         e = dict(
             entry_id=base if seen[base] == 1 else f'{base}-{seen[base]}',
@@ -319,7 +343,8 @@ def match_entry(e, comp, jos, manual):
 def load_manual():
     """data/manual_matches.json:
     {"matches": {"<entry_id>": ["215401", ...]}, "no_match": ["<entry_id>", ...]}
-    entry_id is shown in the build report for every entry (it's the NAME, lower-cased with dashes)."""
+    entry_ids (anonymous, like E-3f9a1c) are listed in data/build_report.md; data/private/entry_key.md says
+    whose entry each one is."""
     if not os.path.exists(MANUAL):
         return {'matches': {}, 'no_match': []}
     m = json.load(open(MANUAL, encoding='utf-8'))
@@ -353,7 +378,8 @@ def main():
             c['n_candidates'] = len(cands)
         e['candidates'] = [dict(mjo=c['mjo'], level=c['level'], n_candidates=c['n_candidates']) for c in cands]
         e['notes'] = notes
-        public = {k: v for k, v in e.items() if k not in ('candidates', 'mjo_numbers')}
+        # Published copy: no names, emails or sheet row numbers.
+        public = {k: v for k, v in e.items() if k not in ('candidates', 'mjo_numbers') + PRIVATE_FIELDS}
         for c in cands:
             by_post[c['mjo']].append(dict(public, confidence=c['level'], n_candidates=c['n_candidates'],
                                           confidence_label=label(c), reasons=c['reasons']))
@@ -391,7 +417,9 @@ def main():
               ensure_ascii=False, indent=1)
 
     write_report(built, comp, jos, posts, entries, unmatched, problems, csv_path)
+    write_private_key(entries)
     build_html(built, posts, unmatched)
+    check_no_identities(entries)
     print(f'Built {built}: {len(posts)} posts, {sum(p["has_full_jo"] for p in posts)} with full JO, '
           f'{len(entries)} post-sharing entries ({len(unmatched)} not matched). See data/build_report.md')
 
@@ -431,7 +459,7 @@ def write_report(built, comp, jos, posts, entries, unmatched, problems, csv_path
          f'{", ".join(p["mjo_number"] for p in posts if not p["has_full_jo"]) or "none"}',
          f'- JO texts not in the compendium: {", ".join(sorted(set(jos) - set(cm))) or "none"}',
          f'- Post-sharing CSV: {os.path.basename(csv_path) if csv_path else "NOT FOUND"} '
-         f'({len(entries)} entries with a NAME)',
+         f'({len(entries)} entries; names and emails are not published, see data/private/entry_key.md)',
          '- Posts by best unofficial confidence level:']
     for lvl in ('reported', 'manual', 'likely', 'possible', 'none'):
         R.append(f'  - {lvl}: {best.get(lvl, 0)}')
@@ -460,6 +488,34 @@ def write_report(built, comp, jos, posts, entries, unmatched, problems, csv_path
     R += ['', 'JO parser details: see data/validation_report.md',
           'To override a match, edit data/manual_matches.json (see README).']
     open(os.path.join(DATA, 'build_report.md'), 'w', encoding='utf-8').write('\n'.join(R) + '\n')
+
+
+def write_private_key(entries):
+    """data/private/entry_key.md (gitignored): which anonymous id belongs to whom, for reviewing matches."""
+    R = ['# Entry key — PRIVATE, do not share or commit', '',
+         'Which anonymous entry id belongs to whom. Use the ids in data/manual_matches.json.', '',
+         '| entry_id | name | email | sheet row | entity / duty station | title | candidates |', '|---|---|---|---|---|---|---|']
+    for e in entries:
+        c = ', '.join(f'{x["mjo"]} ({x["level"]})' for x in e['candidates']) or '—'
+        R.append(f'| {e["entry_id"]} | {e["name"]} | {e["email"] or ""} | {e["csv_row"]} | '
+                 f'{e["entity"]} / {e["duty_station"]} | {oneline(e["title"])} | {c} |')
+    os.makedirs(PRIVATE, exist_ok=True)
+    open(KEY_FILE, 'w', encoding='utf-8').write('\n'.join(R) + '\n')
+
+
+def check_no_identities(entries):
+    """Safety net: stop if a submitter's name or email appears in anything that gets published."""
+    outputs = [os.path.join(DATA, f) for f in ('posts.json', 'shared_not_in_compendium.json', 'build_report.md',
+                                              'manual_matches.json')]
+    outputs += [os.path.join(DIST, 'mrp-explorer.html'), os.path.join(ROOT, 'docs', 'index.html')]
+    needles = {x.lower() for e in entries for x in (e['name'], e['email']) if x}
+    for path in outputs:
+        if not os.path.exists(path):
+            continue
+        text = re.sub(r'\s+', ' ', open(path, encoding='utf-8').read().lower())
+        found = [n for n in needles if n in text]
+        if found:
+            sys.exit(f'PRIVACY CHECK FAILED: {len(found)} submitter name(s)/email(s) found in {os.path.relpath(path, ROOT)}.')
 
 
 def oneline(s):
